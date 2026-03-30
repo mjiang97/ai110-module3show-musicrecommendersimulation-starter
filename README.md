@@ -11,23 +11,68 @@ Your goal is to:
 - Evaluate what your system gets right and wrong
 - Reflect on how this mirrors real world AI recommenders
 
-Replace this paragraph with your own summary of what your version does.
+This simulation builds a content-based music recommender that matches songs to a user's taste profile using numeric audio features and categorical preferences. Given a `UserProfile` with preferred energy level, valence, acousticness, danceability, tempo, genre, and mood, the system scores every song in the catalog by measuring how close each feature is to the user's preference, then returns the top-ranked matches. The goal is to prioritize overall "vibe fit" — a combination of emotional tone and listening context — over any single attribute like genre alone.
 
 ---
 
 ## How The System Works
 
-Explain your design in plain language.
+Real-world recommenders like Spotify and YouTube learn from two sources at once: what millions of other users with similar taste have listened to (collaborative filtering), and the actual properties of the content itself — tempo, energy, acousticness, and so on (content-based filtering). At scale, these signals are combined inside deep neural networks that re-rank hundreds of candidates in milliseconds. This simulation focuses exclusively on the content-based half of that pipeline. Rather than learning from other users, it compares a song's audio features directly against a single user's stated preferences and scores the closeness of that match. The priority here is **vibe alignment**: getting the emotional tone (valence), physical intensity (energy), and acoustic texture (acousticness) right before worrying about genre labels, because those three features together predict listening context more reliably than any single categorical tag.
 
-Some prompts to answer:
+### `Song` Features
 
-- What features does each `Song` use in your system
-  - For example: genre, mood, energy, tempo
-- What information does your `UserProfile` store
-- How does your `Recommender` compute a score for each song
-- How do you choose which songs to recommend
+Each `Song` object stores the following:
 
-You can include a simple diagram or bullet list if helpful.
+| Feature | Type | What it captures |
+|---|---|---|
+| `id` | int | Unique catalog identifier |
+| `title` | str | Song name |
+| `artist` | str | Artist name |
+| `genre` | str | Broad style category (pop, lofi, rock, ambient, jazz, synthwave, indie pop) |
+| `mood` | str | Contextual label (happy, chill, intense, relaxed, moody, focused) |
+| `energy` | float [0–1] | Physical intensity — loudness, drive, activity level |
+| `tempo_bpm` | float | Speed in beats per minute |
+| `valence` | float [0–1] | Emotional brightness — high = happy/uplifting, low = dark/melancholic |
+| `danceability` | float [0–1] | How well the rhythm suits movement |
+| `acousticness` | float [0–1] | Degree of acoustic vs. electronic production |
+
+### `UserProfile` Fields
+
+Each `UserProfile` object stores the user's preferred value for every numeric feature, plus categorical preferences for genre and mood:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `preferred_energy` | float [0–1] | Target energy level for the listening session |
+| `preferred_valence` | float [0–1] | Target emotional tone |
+| `preferred_acousticness` | float [0–1] | Preference for acoustic vs. electronic texture |
+| `preferred_danceability` | float [0–1] | Preference for rhythmic movement |
+| `preferred_tempo_bpm` | float | Target tempo (normalized to [0–1] internally) |
+| `preferred_genre` | str | Favorite genre — matched as a binary bonus |
+| `preferred_mood` | str | Preferred contextual mood — matched as a binary bonus |
+
+### Scoring a Song
+
+Each song receives a composite score built from Gaussian proximity scores on numeric features plus categorical match bonuses:
+
+```
+S(song) = 0.25 · gauss(energy)
+        + 0.20 · gauss(acousticness)
+        + 0.18 · gauss(valence)
+        + 0.12 · gauss(tempo_normalized)
+        + 0.08 · gauss(danceability)
+        + 0.10 · genre_match          ← 1.0 if match, 0.0 otherwise
+        + 0.07 · mood_match           ← 1.0 if match, 0.0 otherwise
+
+where gauss(x) = exp( -(song_value - user_preference)² / (2σ²) )
+```
+
+Weights sum to 1.0. Energy and acousticness are weighted highest because they best capture listening context.
+
+### Choosing What to Recommend
+
+1. Score every song in the catalog using the rule above
+2. Sort by score descending
+3. Return the top N songs (default: 3)
 
 ---
 

@@ -94,7 +94,7 @@ def _gauss(song_val: float, target: float, sigma: float) -> float:
     return math.exp(-((song_val - target) ** 2) / (2 * sigma ** 2))
 
 
-def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, str]:
+def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, List[str]]:
     """
     Score a single song dict against a user preference dict.
 
@@ -110,8 +110,9 @@ def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, str]:
 
     Returns
     -------
-    (score, explanation)  where score is a float and explanation is a plain-
-    English string describing which features drove the recommendation.
+    (score, reasons)  where score is a float (max 11.3) and reasons is a list
+    of strings describing every feature that contributed meaningfully, e.g.:
+        ["genre match (+2.0)", "energy close match (+2.48)"]
     """
     score = 0.0
     reasons: List[str] = []
@@ -119,19 +120,20 @@ def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, str]:
     # --- 1. Genre match (+2.0) ---
     if song.get("genre") == user_prefs.get("favorite_genre"):
         score += 2.0
-        reasons.append(f"genre match ({song['genre']})")
+        reasons.append("genre match (+2.0)")
 
     # --- 2. Mood match (+1.0) ---
     if song.get("mood") == user_prefs.get("favorite_mood"):
         score += 1.0
-        reasons.append(f"mood match ({song['mood']})")
+        reasons.append("mood match (+1.0)")
 
     # --- 3. Energy proximity (always scored) ---
     energy_pts = _gauss(song["energy"], user_prefs["target_energy"], _SIGMA["energy"]) * _WEIGHTS["energy"]
     score += energy_pts
     if energy_pts >= _WEIGHTS["energy"] * _EXPLAIN_THRESHOLD:
         reasons.append(
-            f"energy close match ({song['energy']:.2f} vs target {user_prefs['target_energy']:.2f})"
+            f"energy close match (+{energy_pts:.2f})"
+            f" [{song['energy']:.2f} vs target {user_prefs['target_energy']:.2f}]"
         )
 
     # --- 4. Acousticness proximity (optional) ---
@@ -140,7 +142,8 @@ def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, str]:
         score += ac_pts
         if ac_pts >= _WEIGHTS["acousticness"] * _EXPLAIN_THRESHOLD:
             reasons.append(
-                f"acousticness close match ({song['acousticness']:.2f} vs target {user_prefs['target_acousticness']:.2f})"
+                f"acousticness close match (+{ac_pts:.2f})"
+                f" [{song['acousticness']:.2f} vs target {user_prefs['target_acousticness']:.2f}]"
             )
 
     # --- 5. Valence proximity (optional) ---
@@ -149,7 +152,8 @@ def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, str]:
         score += val_pts
         if val_pts >= _WEIGHTS["valence"] * _EXPLAIN_THRESHOLD:
             reasons.append(
-                f"valence close match ({song['valence']:.2f} vs target {user_prefs['target_valence']:.2f})"
+                f"valence close match (+{val_pts:.2f})"
+                f" [{song['valence']:.2f} vs target {user_prefs['target_valence']:.2f}]"
             )
 
     # --- 6. Tempo proximity (optional) — normalised to [0, 1] before Gaussian ---
@@ -159,7 +163,10 @@ def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, str]:
         tempo_pts = _gauss(song_tempo_norm, user_tempo_norm, _SIGMA["tempo"]) * _WEIGHTS["tempo"]
         score += tempo_pts
         if tempo_pts >= _WEIGHTS["tempo"] * _EXPLAIN_THRESHOLD:
-            reasons.append(f"tempo close match ({song['tempo_bpm']:.0f} BPM)")
+            reasons.append(
+                f"tempo close match (+{tempo_pts:.2f})"
+                f" [{song['tempo_bpm']:.0f} BPM vs target {user_prefs['target_tempo_bpm']:.0f} BPM]"
+            )
 
     # --- 7. Danceability proximity (optional) ---
     if user_prefs.get("target_danceability") is not None:
@@ -167,15 +174,14 @@ def score_song(song: Dict, user_prefs: Dict) -> Tuple[float, str]:
         score += dance_pts
         if dance_pts >= _WEIGHTS["danceability"] * _EXPLAIN_THRESHOLD:
             reasons.append(
-                f"danceability close match ({song['danceability']:.2f} vs target {user_prefs['target_danceability']:.2f})"
+                f"danceability close match (+{dance_pts:.2f})"
+                f" [{song['danceability']:.2f} vs target {user_prefs['target_danceability']:.2f}]"
             )
 
-    explanation = (
-        "Recommended because: " + ", ".join(reasons)
-        if reasons
-        else "Partial feature match — no single feature scored above threshold"
-    )
-    return round(score, 4), explanation
+    if not reasons:
+        reasons.append("partial feature match — no single feature scored above threshold")
+
+    return round(score, 4), reasons
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +233,8 @@ class Recommender:
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
         user_dict = self._profile_to_dict(user)
-        _, explanation = score_song(self._song_to_dict(song), user_dict)
-        return explanation
+        _, reasons = score_song(self._song_to_dict(song), user_dict)
+        return "Recommended because: " + ", ".join(reasons)
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +245,10 @@ def load_songs(csv_path: str) -> List[Dict]:
     """
     Loads songs from a CSV file.
     Required by src/main.py
+
+    Numeric fields (energy, tempo_bpm, valence, danceability, acousticness) are
+    cast to float so math operations work without further conversion.
+    The id field is cast to int.
     """
     songs: List[Dict] = []
     with open(csv_path, newline="", encoding="utf-8") as f:
@@ -256,15 +266,18 @@ def load_songs(csv_path: str) -> List[Dict]:
                 "danceability": float(row["danceability"]),
                 "acousticness": float(row["acousticness"]),
             })
+    print(f"Loaded {len(songs)} songs.")
     return songs
 
 
-def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
+def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, List[str]]]:
     """
     Functional implementation of the recommendation logic.
     Required by src/main.py
 
-    Returns a list of (song_dict, score, explanation) tuples, sorted by score descending.
+    For every song in the catalog, calls score_song to get a numeric score and
+    a list of reasons. Sorts all results by score descending, then returns the
+    top k as (song_dict, score, reasons) tuples.
     """
     scored = [(song, *score_song(song, user_prefs)) for song in songs]
     scored.sort(key=lambda x: x[1], reverse=True)

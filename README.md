@@ -74,6 +74,66 @@ Weights sum to 1.0. Energy and acousticness are weighted highest because they be
 2. Sort by score descending
 3. Return the top N songs (default: 3)
 
+### Data Flow Diagram
+
+```mermaid
+flowchart TD
+    A(["`**User Prefs**
+    favorite_genre, favorite_mood
+    target_energy, target_valence
+    target_acousticness, target_tempo_bpm
+    target_danceability`"]) --> SCORE
+
+    B(["`**songs.csv**
+    20 songs × 9 features`"]) --> LOAD
+
+    LOAD["`**load_songs**
+    parse CSV rows → list of dicts`"]
+    LOAD --> CATALOG
+
+    CATALOG(["`**Song Catalog**
+    List of 20 song dicts`"]) --> LOOP
+
+    LOOP{"`**For each song
+    in catalog**`"} --> SCORE
+
+    SCORE["`**score_song**`"]
+
+    SCORE --> G1
+    G1{Genre match?} -- "+2.0" --> SUM
+    G1 -- "+0.0" --> SUM
+
+    SUM --> G2
+    G2{Mood match?} -- "+1.0" --> SUM2
+    G2 -- "+0.0" --> SUM2
+
+    SUM2 --> N1["`Gaussian: energy × 2.5
+    σ = 0.15`"]
+    N1 --> N2["`Gaussian: acousticness × 2.0
+    σ = 0.15`"]
+    N2 --> N3["`Gaussian: valence × 1.8
+    σ = 0.20`"]
+    N3 --> N4["`Gaussian: tempo × 1.2
+    σ = 0.10`"]
+    N4 --> N5["`Gaussian: danceability × 0.8
+    σ = 0.20`"]
+
+    N5 --> RESULT(["`**score** ∈ [0, 11.3]
+    + explanation string`"])
+
+    RESULT --> LOOP
+    LOOP -- "all songs scored" --> SORT
+
+    SORT["`**Sort** all
+    (song, score, explanation)
+    by score descending`"]
+
+    SORT --> TOPK["`**Slice** top K`"]
+
+    TOPK --> OUT(["`**Top K Recommendations**
+    each with score + reason why`"])
+```
+
 ---
 
 ## Getting Started

@@ -50,29 +50,54 @@ Each `UserProfile` object stores the user's preferred value for every numeric fe
 | `preferred_genre` | str | Favorite genre — matched as a binary bonus |
 | `preferred_mood` | str | Preferred contextual mood — matched as a binary bonus |
 
-### Scoring a Song
+### Algorithm Recipe
 
-Each song receives a composite score built from Gaussian proximity scores on numeric features plus categorical match bonuses:
+Each song is scored by summing points across seven rules. The maximum possible score is **11.3**.
+
+**Step 1 — Categorical bonuses (binary)**
+
+| Rule | Points | Reasoning |
+|---|---|---|
+| Genre matches `favorite_genre` | +2.0 | Genre is the most stable user preference — a lo-fi listener almost never accepts metal regardless of other features |
+| Mood matches `favorite_mood` | +1.0 | Mood is session-dependent and softer, so it earns half the genre bonus |
+
+**Step 2 — Gaussian proximity scores (continuous)**
+
+For each numeric feature, the formula is:
 
 ```
-S(song) = 0.25 · gauss(energy)
-        + 0.20 · gauss(acousticness)
-        + 0.18 · gauss(valence)
-        + 0.12 · gauss(tempo_normalized)
-        + 0.08 · gauss(danceability)
-        + 0.10 · genre_match          ← 1.0 if match, 0.0 otherwise
-        + 0.07 · mood_match           ← 1.0 if match, 0.0 otherwise
-
-where gauss(x) = exp( -(song_value - user_preference)² / (2σ²) )
+feature_score = exp( -(song_value - user_target)² / (2 × σ²) ) × weight
 ```
 
-Weights sum to 1.0. Energy and acousticness are weighted highest because they best capture listening context.
+A perfect match returns the full weight. The score decays toward 0 the further the song drifts from the target. Sigma (σ) controls how forgiving the tolerance is.
 
-### Choosing What to Recommend
+| Feature | Max Points | σ | Reasoning |
+|---|---|---|---|
+| Energy | +2.5 | 0.15 | Strongest predictor of listening context (workout vs. study vs. sleep) |
+| Acousticness | +2.0 | 0.15 | Sharp axis between electronic and organic texture — tight tolerance |
+| Valence | +1.8 | 0.20 | Emotional brightness is real but fuzzier — wider tolerance |
+| Tempo | +1.2 | 0.10 | Pace is physically felt; tightest tolerance of any feature |
+| Danceability | +0.8 | 0.20 | Correlated with energy, so given the lowest weight to reduce redundancy |
 
-1. Score every song in the catalog using the rule above
-2. Sort by score descending
-3. Return the top N songs (default: 3)
+**Step 3 — Explanation filter**
+
+A feature only appears in the output explanation when it scores ≥ 80% of its maximum. This keeps the "Because:" line honest — it only reports features that genuinely drove the result.
+
+**Step 4 — Ranking**
+
+All (song, score, explanation) tuples are sorted descending by score. The top K are returned (default K = 5).
+
+### Potential Biases
+
+- **Genre lock-in.** Genre is the single highest-weighted signal (+2.0 flat bonus). A song that matches on all five numeric features but has the wrong genre label will lose to a same-genre song that only partially matches on energy. This means excellent cross-genre suggestions — a jazz song with perfect energy and valence for a lo-fi user — get buried.
+
+- **The catalog is too small and too culturally narrow.** 20 songs written by one person encodes one person's idea of what "chill" or "intense" means. A user from a different musical background will find the mood and genre labels don't map to their experience, and the scoring will feel arbitrary.
+
+- **Mood is treated as a permanent preference, not a context.** The profile stores one `favorite_mood` and awards it a fixed bonus every session. Real listeners want different things at 8am versus midnight. A system that can't model time-of-day or activity context will keep recommending the same mood regardless of what the user actually needs right now.
+
+- **The Gaussian assumption punishes "acceptable range" preferences.** The formula assumes users want exactly one target value, with a smooth decay in both directions. But some users have a threshold preference — "anything above energy 0.7 is fine" — not a peak preference. A song at 0.95 energy would score lower than a song at 0.75 even if both are genuinely acceptable to the user.
+
+- **No diversity enforcement.** The ranking rule is a pure sort. If the top 5 songs are nearly identical lo-fi tracks, the user gets a homogeneous list with no discovery. Real systems (Spotify, YouTube) apply a diversity penalty to prevent this.
 
 ### Data Flow Diagram
 
